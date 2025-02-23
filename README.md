@@ -1,58 +1,114 @@
-Transform Nested Data into Top-Level Data
-Helping Klaviyo Users Unlock Better Segmentation & Automation
+import datetime
+import os
+from napkin import response, request
+from klaviyo_api import KlaviyoAPI  # Import the Klaviyo SDK
 
-🚀 What Problem Does This Solve?
-Klaviyo (and many segmentation tools) struggle with nested data because they only support top-level attributes.
-Previously, Klaviyo users had no direct solution—forcing them to hire developers or rely on third-party partners.
-This solution provides a clear example of how to transform nested data, making it usable within Klaviyo without extensive development work.
+# Initialize the Klaviyo client with your API key
+klaviyo = KlaviyoAPI(api_key=os.environ['klaviyo_api'], max_delay=60, max_retries=3)
 
-🎯 Who Is This For?
-✅ Klaviyo customers who need advanced segmentation but struggle with complex data formats.
-✅ Marketing teams looking to use detailed order, customer, or event data in flows.
-✅ Developers who want an easy-to-follow API and webhook solution.
+# Function to bubble up nested data
+def bubble_up_nested_data(data):
+    event_properties = data.get("event", {})
 
-🔑 What This Solution Enables
-✨ Seamless Segmentation: Convert nested data into top-level attributes that Klaviyo can read.
-✨ Automation with Webhooks: Process event data in real-time and send clean data back.
-✨ More Powerful Targeting: Use previously inaccessible order details, customer preferences, or event properties.
+    properties = {
+        "Order_ID": event_properties.get("OrderId", ""),
+        "Email": data.get("email", ""),
+        "Discount_Value": event_properties.get("DiscountValue", 0),
+        "Total_Value": event_properties.get("$value", 0),
+        "Currency": event_properties.get("$value_currency", ""),
+        "Billing_Address": event_properties.get("BillingAddress", {}).get("Address1", ""),
+        "City": event_properties.get("BillingAddress", {}).get("City", ""),
+        "Country_Code": event_properties.get("BillingAddress", {}).get("CountryCode", ""),
+        "First_Name": event_properties.get("BillingAddress", {}).get("FirstName", ""),
+        "Last_Name": event_properties.get("BillingAddress", {}).get("LastName", ""),
+        "Phone_Number": event_properties.get("BillingAddress", {}).get("Phone", ""),
+        "Region_Code": event_properties.get("BillingAddress", {}).get("RegionCode", "")
+    }
 
-🛠 How It Works (Simplified Flow)
-1️⃣ Klaviyo Event Triggered
-→ A customer places an order (or another event occurs).
-2️⃣ Webhook Sends Data to Napkin.io
-→ The raw, nested data is sent for processing.
-3️⃣ Data is Transformed (Flattened)
-→ The script extracts key details and restructures them.
-4️⃣ Transformed Data is Sent Back to Klaviyo
-→ Now, it's usable for segmentation, triggers, or conditional splits.
+    # Bubble up categories
+    categories = event_properties.get("Categories", [])
+    for i, category in enumerate(categories):
+        properties[f"Category_{i+1}"] = category
 
-🔎 Key Features
-✅ API & Webhook Integration – Automate data flow between Klaviyo and Napkin.io.
-✅ Data Transformation – Flatten complex structures to unlock new segmentation options.
-✅ Timestamping & Error Handling – Ensure clean, reliable event data.
-✅ No Need for Custom Dev Work – Provides an out-of-the-box example to get started.
+    # Bubble up items
+    items = event_properties.get("Items", [])
+    item_list = []
+    for i, item in enumerate(items):
+        item_properties = {
+            "Product_ID": item.get("ProductID", ""),
+            "SKU": item.get("SKU", ""),
+            "Product_Name": item.get("ProductName", ""),
+            "Quantity": item.get("Quantity", 0),
+            "Item_Price": item.get("ItemPrice", 0),
+            "Row_Total": item.get("RowTotal", 0),
+            "Product_URL": item.get("ProductURL", ""),
+            "Image_URL": item.get("ImageURL", ""),
+            "Categories": item.get("Categories", []),
+            "Brand": item.get("Brand", "")
+        }
+        item_list.append(item_properties)
+    properties["Items"] = item_list
 
-📌 Easy Setup
-1️⃣ In Klaviyo:
-Generate an API Key.
-Set up a Metric with nested data (e.g., “Placed Order” event).
-Configure a webhook to send data.
-2️⃣ In Napkin.io:
-Sign up & create a function.
-Copy your webhook destination URL.
-Enable API authentication & paste your Klaviyo webhook data.
-3️⃣ Set Up Webhook Flow:
-Create a new flow in Klaviyo.
-Add a "Metric Trigger" (e.g., Placed Order).
-Attach a "Webhook" action using the Napkin.io URL.
+    return properties
 
-💡 Why This Matters for Klaviyo Users
-Before:
-❌ Nested data was difficult to use.
-❌ Segmentation was limited.
-❌ No official solution—users had to hire developers or external agencies.
+# Function to stamp the current time
+def stamp_current_time(event_properties):
+    date_time = datetime.datetime.now()
+    event_properties["Event_Time"] = date_time.strftime("%Y-%m-%dT%H:%M:%S")
+    return event_properties
 
-Now:
-✅ Klaviyo users finally have an actionable example.
-✅ Segmentation & automation become more powerful.
-✅ No need for external development resources.
+# Function to send data to Klaviyo
+def send_data_to_klaviyo(event_properties):
+    email = event_properties.get("Email")  # Ensure email is extracted for the event
+
+    if not email:
+        print("Error: Missing email identifier.")
+        return
+
+    # Create the event in Klaviyo using the Klaviyo API client
+    try:
+        klaviyo.Events.create_event({
+            "data": {
+                "type": "event",
+                "attributes": {
+                    "time": event_properties.get("Event_Time"),
+                    "properties": event_properties,
+                    "metric": {
+                        "data": {
+                            "type": "metric",
+                            "attributes": {
+                                "name": "Placed Order Nested Data"  # Event name
+                            }
+                        }
+                    },
+                    "profile": {
+                        "data": {
+                            "type": "profile",
+                            "attributes": {
+                                "email": email
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        print("Event sent successfully.")
+    except Exception as e:
+        print(f"Failed to send event: {e}")
+
+# Main logic: Use incoming data from the request
+try:
+    # Access the incoming JSON payload
+    incoming_data = request.body  # Use this if the content type is application/json
+    if incoming_data:
+        event_properties = bubble_up_nested_data(incoming_data)
+        event_properties = stamp_current_time(event_properties)
+        send_data_to_klaviyo(event_properties)
+        response.status_code = 200
+        response.body = "Event processed successfully"
+    else:
+        response.status_code = 400
+        response.body = "No data received"
+except Exception as e:
+    response.status_code = 500
+    response.body = f"Error processing event: {str(e)}"
